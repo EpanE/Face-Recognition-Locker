@@ -14,7 +14,7 @@ LOW = GPIO.LOW
 # GPIO setup
 RELAY_PIN = 17       # BCM numbering
 RELAY_ON_LEVEL = LOW   # many relay boards are active LOW
-RELAY_OFF_LEVEL = HIGHgit
+RELAY_OFF_LEVEL = HIGH
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT, initial=RELAY_OFF_LEVEL)
