@@ -7,10 +7,14 @@ import threading
 import RPi.GPIO as GPIO
 import tkinter as tk
 
+#STATUS
+HIGH = GPIO.HIGH
+LOW = GPIO.LOW 
+
 # GPIO setup
 RELAY_PIN = 17       # BCM numbering
-RELAY_ON_LEVEL = GPIO.LOW   # many relay boards are active LOW
-RELAY_OFF_LEVEL = GPIO.HIGH
+RELAY_ON_LEVEL = LOW   # many relay boards are active LOW
+RELAY_OFF_LEVEL = HIGHgit
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT, initial=RELAY_OFF_LEVEL)
