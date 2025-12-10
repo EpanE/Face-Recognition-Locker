@@ -4,16 +4,15 @@ import numpy as np
 import csv
 import time
 import threading
-import RPi.GPIO as GPIO
+from gpiozero import OutputDevice
 import tkinter as tk
 
-# GPIO setup
-RELAY_PIN = 17       # BCM numbering
-RELAY_ON_LEVEL = GPIO.LOW   # many relay boards are active LOW
-RELAY_OFF_LEVEL = GPIO.HIGH
+# GPIO setup using gpiozero
+RELAY_PIN = 17  # BCM numbering
 
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(RELAY_PIN, GPIO.OUT, initial=RELAY_OFF_LEVEL)
+# Many 5V relay modules are active LOW: input LOW = relay ON
+# active_high=False means "on()" will drive the pin LOW.
+relay = OutputDevice(RELAY_PIN, active_high=False, initial_value=True)
 
 # Face recognition parameters
 CONSECUTIVE_FRAMES_REQUIRED = 5
@@ -59,19 +58,22 @@ cooldown_until = 0.0
 # Thread control
 stop_flag = False
 
+
 def set_relay(on):
+    """Turn relay on/off and manage timers."""
     global relay_locked, relay_on_until, cooldown_until
     now = time.time()
     if on:
-        GPIO.output(RELAY_PIN, RELAY_ON_LEVEL)
+        relay.on()   # active_low module: on() = LOW = relay energised
         relay_locked = True
         relay_on_until = now + RELAY_ON_DURATION
         cooldown_until = relay_on_until + COOLDOWN_DURATION
         print("Relay ON until", relay_on_until)
     else:
-        GPIO.output(RELAY_PIN, RELAY_OFF_LEVEL)
+        relay.off()  # off() = HIGH = relay released
         relay_locked = False
         print("Relay OFF")
+
 
 def match_face(face_descriptor):
     if len(known_descriptors) == 0:
@@ -84,6 +86,7 @@ def match_face(face_descriptor):
         return known_labels[idx], min_dist
     else:
         return "Unknown", min_dist
+
 
 def video_loop():
     global current_name, last_name, same_name_count
@@ -169,7 +172,8 @@ def video_loop():
 
     cap.release()
     cv2.destroyAllWindows()
-    GPIO.output(RELAY_PIN, RELAY_OFF_LEVEL)
+    set_relay(False)
+
 
 def ui_loop():
     def on_unlock_click():
@@ -199,6 +203,7 @@ def ui_loop():
     window.protocol("WM_DELETE_WINDOW", on_close)
     window.mainloop()
 
+
 if __name__ == "__main__":
     try:
         t_video = threading.Thread(target=video_loop, daemon=True)
@@ -206,5 +211,4 @@ if __name__ == "__main__":
         ui_loop()
     finally:
         stop_flag = True
-        GPIO.output(RELAY_PIN, RELAY_OFF_LEVEL)
-        GPIO.cleanup()
+        set_relay(False)
