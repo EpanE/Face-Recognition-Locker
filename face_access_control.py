@@ -19,16 +19,16 @@ relay = OutputDevice(RELAY_PIN, active_high=False, initial_value=True)
 
 # Recognition parameters
 MATCH_THRESHOLD = 0.55
-CONSECUTIVE_REQUIRED = 5
-RELAY_ACTIVE_TIME = 5      # Seconds relay stays ON
-COOLDOWN_TIME = 3          # Additional seconds relay must stay OFF
+REQUIRED_VISIBLE_SECONDS = 3.0       # how long the same person must be seen
+RELAY_ACTIVE_TIME = 5.0              # seconds relay stays ON
+COOLDOWN_TIME = 3.0                  # seconds after relay OFF before next unlock
 
 # State variables
-same_face_count = 0
 last_name = "Unknown"
+same_name_start_time = None
 relay_locked = False
-relay_off_time = 0
-cooldown_until = 0
+relay_off_time = 0.0
+cooldown_until = 0.0
 
 # Paths
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +54,6 @@ with open(CSV_PATH, "r") as f:
         descriptors.append(np.array([float(x) for x in row[1:129]], dtype=np.float32))
 
 descriptors = np.array(descriptors)
-
 print(f"Loaded {len(descriptors)} face descriptors")
 
 
@@ -84,14 +83,15 @@ def set_relay(on):
 
 
 def video_loop():
-    global same_face_count, last_name, relay_locked, relay_off_time
+    global last_name, same_name_start_time
+    global relay_locked, relay_off_time, cooldown_until
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Cannot open camera")
         return
 
-    print("System running - Press q to stop")
+    print("System running. Press q in video window to stop")
 
     while True:
         ret, frame = cap.read()
@@ -102,9 +102,19 @@ def video_loop():
         faces = detector(gray)
 
         current_name = "Unknown"
+        now = time.time()
+
+        # Auto switch off relay after RELAY_ACTIVE_TIME
+        if relay_locked and now > relay_off_time:
+            set_relay(False)
 
         if faces:
-            face = max(faces, key=lambda f: (f.right()-f.left())*(f.bottom()-f.top()))
+            # use largest face
+            face = max(
+                faces,
+                key=lambda f: (f.right() - f.left()) * (f.bottom() - f.top())
+            )
+
             shape = sp(frame, face)
             aligned = dlib.get_face_chip(frame, shape)
             descriptor = np.array(facerec.compute_face_descriptor(aligned))
@@ -112,45 +122,67 @@ def video_loop():
             name, dist = match_face(descriptor)
             current_name = name
 
-            # draw
             x1, y1, x2, y2 = face.left(), face.top(), face.right(), face.bottom()
-            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0),2)
-            cv2.putText(frame, f"{name} ({dist:.2f})", (x1, y1-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255),2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                f"{name} ({dist:.2f})",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
 
-            # Consecutive frame logic
-            if name == last_name and name != "Unknown":
-                same_face_count += 1
+            # time based same name logic
+            if name != "Unknown":
+                if name == last_name:
+                    # still same person
+                    if same_name_start_time is None:
+                        same_name_start_time = now
+                    visible_duration = now - same_name_start_time
+                else:
+                    # new person
+                    last_name = name
+                    same_name_start_time = now
+                    visible_duration = 0.0
+
+                # condition to unlock
+                if (
+                    visible_duration >= REQUIRED_VISIBLE_SECONDS
+                    and not relay_locked
+                    and now > cooldown_until
+                ):
+                    print(f"Access granted to {name}"
+                          f" after {visible_duration:.1f} seconds")
+                    set_relay(True)
+                    # reset timer so next unlock needs new continuous view
+                    same_name_start_time = None
+
             else:
-                same_face_count = 1
-            last_name = name
-
-            now = time.time()
-
-            # Relay auto-off
-            if relay_locked and now > relay_off_time:
-                set_relay(False)
-
-            # Auto-unlock condition
-            if (
-                name != "Unknown"
-                and same_face_count >= CONSECUTIVE_REQUIRED
-                and not relay_locked
-                and now > cooldown_until
-            ):
-                print(f"Access granted to {name}")
-                set_relay(True)
+                # name is Unknown
+                last_name = "Unknown"
+                same_name_start_time = None
 
         else:
-            same_face_count = 0
+            current_name = "No face"
             last_name = "Unknown"
+            same_name_start_time = None
 
-        cv2.putText(frame, f"Current: {current_name}", (10,30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255),2)
+        # overlay info
+        cv2.putText(
+            frame,
+            f"Current: {current_name}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+        )
 
         cv2.imshow("Face Access Control", frame)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     set_relay(False)
@@ -165,17 +197,23 @@ def ui_loop():
             print("Manual unlock triggered")
             set_relay(True)
         else:
-            print("Cooldown active")
+            print("Cooldown active, manual unlock blocked")
 
     win = tk.Tk()
     win.title("Door Control")
 
-    tk.Label(win, text="Face Recognition Door System",
-             font=("Arial",16)).pack(pady=10)
+    tk.Label(
+        win,
+        text="Face Recognition Door System",
+        font=("Arial", 16),
+    ).pack(pady=10)
 
-    tk.Button(win, text="Unlock Door",
-              font=("Arial",16),
-              command=manual_unlock).pack(pady=20)
+    tk.Button(
+        win,
+        text="Unlock Door",
+        font=("Arial", 16),
+        command=manual_unlock,
+    ).pack(pady=20)
 
     tk.Label(win, text="Close window to exit").pack()
 
@@ -186,3 +224,4 @@ if __name__ == "__main__":
     t = threading.Thread(target=video_loop, daemon=True)
     t.start()
     ui_loop()
+    # when UI closes, program ends, video thread stops on next loop
