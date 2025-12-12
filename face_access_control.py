@@ -1,109 +1,101 @@
 import cv2
 import dlib
-import numpy as np
 import csv
+import numpy as np
 import time
 import threading
-from gpiozero import OutputDevice
 import tkinter as tk
+import os
 
-# GPIO setup using gpiozero
-RELAY_PIN = 17  # BCM numbering
+from gpiozero import Device, OutputDevice
+from gpiozero.pins.lgpio import LGPIOFactory
 
-# Many 5V relay modules are active LOW: input LOW = relay ON
-# active_high=False means "on()" will drive the pin LOW.
+# Force Pi 5 GPIO backend
+Device.pin_factory = LGPIOFactory()
+
+# Relay setup
+RELAY_PIN = 17
 relay = OutputDevice(RELAY_PIN, active_high=False, initial_value=True)
 
-# Face recognition parameters
-CONSECUTIVE_FRAMES_REQUIRED = 5
-RELAY_ON_DURATION = 5.0       # seconds
-COOLDOWN_DURATION = 3.0       # seconds
-MATCH_THRESHOLD = 0.5         # adjust based on your data
+# Recognition parameters
+MATCH_THRESHOLD = 0.55
+CONSECUTIVE_REQUIRED = 5
+RELAY_ACTIVE_TIME = 5      # Seconds relay stays ON
+COOLDOWN_TIME = 3          # Additional seconds relay must stay OFF
 
-# Paths to models and CSV
-PREDICTOR_PATH = "data/data_dlib/shape_predictor_5_face_landmarks.dat"
-FACE_RECOG_MODEL_PATH = "data/data_dlib/dlib_face_recognition_resnet_model_v1.dat"
-CSV_FEATURES_PATH = "data/features_all.csv"
+# State variables
+same_face_count = 0
+last_name = "Unknown"
+relay_locked = False
+relay_off_time = 0
+cooldown_until = 0
+
+# Paths
+BASE = os.path.dirname(os.path.abspath(__file__))
+PREDICTOR_PATH = BASE + "/data/data_dlib/shape_predictor_68_face_landmarks.dat"
+FACE_MODEL_PATH = BASE + "/data/data_dlib/dlib_face_recognition_resnet_model_v1.dat"
+CSV_PATH = BASE + "/data/features_all.csv"
 
 # Load dlib models
 detector = dlib.get_frontal_face_detector()
-shape_predictor = dlib.shape_predictor(PREDICTOR_PATH)
-face_rec_model = dlib.face_recognition_model_v1(FACE_RECOG_MODEL_PATH)
+sp = dlib.shape_predictor(PREDICTOR_PATH)
+facerec = dlib.face_recognition_model_v1(FACE_MODEL_PATH)
 
-# Load known face descriptors from CSV
-known_descriptors = []
-known_labels = []
+# Load CSV features
+labels = []
+descriptors = []
 
-with open(CSV_FEATURES_PATH, "r", newline="") as f:
+with open(CSV_PATH, "r") as f:
     reader = csv.reader(f)
     for row in reader:
         if len(row) < 129:
             continue
-        label = row[0]
-        descriptor = np.array([float(x) for x in row[1:129]], dtype=np.float32)
-        known_labels.append(label)
-        known_descriptors.append(descriptor)
+        labels.append(row[0])
+        descriptors.append(np.array([float(x) for x in row[1:129]], dtype=np.float32))
 
-known_descriptors = np.array(known_descriptors)
+descriptors = np.array(descriptors)
 
-# State variables for recognition and relay
-current_name = "Unknown"
-last_name = "Unknown"
-same_name_count = 0
-
-relay_locked = False
-relay_on_until = 0.0
-cooldown_until = 0.0
-
-# Thread control
-stop_flag = False
-
-
-def set_relay(on):
-    """Turn relay on/off and manage timers."""
-    global relay_locked, relay_on_until, cooldown_until
-    now = time.time()
-    if on:
-        relay.on()   # active_low module: on() = LOW = relay energised
-        relay_locked = True
-        relay_on_until = now + RELAY_ON_DURATION
-        cooldown_until = relay_on_until + COOLDOWN_DURATION
-        print("Relay ON until", relay_on_until)
-    else:
-        relay.off()  # off() = HIGH = relay released
-        relay_locked = False
-        print("Relay OFF")
+print(f"Loaded {len(descriptors)} face descriptors")
 
 
 def match_face(face_descriptor):
-    if len(known_descriptors) == 0:
-        return "Unknown", 1e9
-
-    distances = np.linalg.norm(known_descriptors - face_descriptor, axis=1)
+    distances = np.linalg.norm(descriptors - face_descriptor, axis=1)
     idx = np.argmin(distances)
-    min_dist = distances[idx]
-    if min_dist < MATCH_THRESHOLD:
-        return known_labels[idx], min_dist
+    dist = distances[idx]
+    if dist < MATCH_THRESHOLD:
+        return labels[idx], dist
+    return "Unknown", dist
+
+
+def set_relay(on):
+    global relay_locked, relay_off_time, cooldown_until
+    now = time.time()
+
+    if on:
+        print("Relay ON")
+        relay.on()
+        relay_locked = True
+        relay_off_time = now + RELAY_ACTIVE_TIME
+        cooldown_until = relay_off_time + COOLDOWN_TIME
     else:
-        return "Unknown", min_dist
+        print("Relay OFF")
+        relay.off()
+        relay_locked = False
 
 
 def video_loop():
-    global current_name, last_name, same_name_count
-    global relay_locked, relay_on_until, cooldown_until
-    global stop_flag
+    global same_face_count, last_name, relay_locked, relay_off_time
 
-    cap = cv2.VideoCapture(0)  # change index if needed
-
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Cannot open camera")
-        stop_flag = True
         return
 
-    while not stop_flag:
+    print("System running - Press q to stop")
+
+    while True:
         ret, frame = cap.read()
         if not ret:
-            print("Cannot read frame")
             break
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -111,104 +103,86 @@ def video_loop():
 
         current_name = "Unknown"
 
-        if len(faces) > 0:
-            # Use the largest face
-            areas = []
-            for f in faces:
-                areas.append((f.right() - f.left()) * (f.bottom() - f.top()))
-            largest_idx = int(np.argmax(areas))
-            face_rect = faces[largest_idx]
+        if faces:
+            face = max(faces, key=lambda f: (f.right()-f.left())*(f.bottom()-f.top()))
+            shape = sp(frame, face)
+            aligned = dlib.get_face_chip(frame, shape)
+            descriptor = np.array(facerec.compute_face_descriptor(aligned))
 
-            shape = shape_predictor(frame, face_rect)
-            face_chip = dlib.get_face_chip(frame, shape)
-            face_descriptor = np.array(face_rec_model.compute_face_descriptor(face_chip))
-
-            name, dist = match_face(face_descriptor)
+            name, dist = match_face(descriptor)
             current_name = name
 
-            # Draw box and name
-            x1, y1, x2, y2 = face_rect.left(), face_rect.top(), face_rect.right(), face_rect.bottom()
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            text = f"{name} {dist:.2f}"
-            cv2.putText(frame, text, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            # draw
+            x1, y1, x2, y2 = face.left(), face.top(), face.right(), face.bottom()
+            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0),2)
+            cv2.putText(frame, f"{name} ({dist:.2f})", (x1, y1-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255),2)
 
             # Consecutive frame logic
             if name == last_name and name != "Unknown":
-                same_name_count += 1
+                same_face_count += 1
             else:
-                same_name_count = 1
-                last_name = name
+                same_face_count = 1
+            last_name = name
 
             now = time.time()
 
-            # Handle relay timers
-            if relay_locked and now > relay_on_until:
+            # Relay auto-off
+            if relay_locked and now > relay_off_time:
                 set_relay(False)
 
-            # Trigger relay if conditions met
-            if (name != "Unknown"
-                and same_name_count >= CONSECUTIVE_FRAMES_REQUIRED
+            # Auto-unlock condition
+            if (
+                name != "Unknown"
+                and same_face_count >= CONSECUTIVE_REQUIRED
                 and not relay_locked
-                and now > cooldown_until):
+                and now > cooldown_until
+            ):
+                print(f"Access granted to {name}")
                 set_relay(True)
 
         else:
-            current_name = "Unknown"
-            same_name_count = 0
+            same_face_count = 0
             last_name = "Unknown"
-            now = time.time()
-            if relay_locked and now > relay_on_until:
-                set_relay(False)
 
-        # Show current name on screen even if no face box
-        cv2.putText(frame, f"Current: {current_name}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                    (255, 255, 255), 2)
+        cv2.putText(frame, f"Current: {current_name}", (10,30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255),2)
 
         cv2.imshow("Face Access Control", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+    set_relay(False)
     cap.release()
     cv2.destroyAllWindows()
-    set_relay(False)
 
 
 def ui_loop():
-    def on_unlock_click():
+    def manual_unlock():
         now = time.time()
         if now > cooldown_until:
-            print("Manual unlock button pressed")
+            print("Manual unlock triggered")
             set_relay(True)
+        else:
+            print("Cooldown active")
 
-    window = tk.Tk()
-    window.title("Door Control")
+    win = tk.Tk()
+    win.title("Door Control")
 
-    label = tk.Label(window, text="Face Access System", font=("Arial", 16))
-    label.pack(pady=10)
+    tk.Label(win, text="Face Recognition Door System",
+             font=("Arial",16)).pack(pady=10)
 
-    button = tk.Button(window, text="Unlock door", font=("Arial", 14),
-                       command=on_unlock_click)
-    button.pack(pady=20)
+    tk.Button(win, text="Unlock Door",
+              font=("Arial",16),
+              command=manual_unlock).pack(pady=20)
 
-    info_label = tk.Label(window, text="Close window or press Q in video to exit")
-    info_label.pack(pady=10)
+    tk.Label(win, text="Close window to exit").pack()
 
-    def on_close():
-        global stop_flag
-        stop_flag = True
-        window.destroy()
-
-    window.protocol("WM_DELETE_WINDOW", on_close)
-    window.mainloop()
+    win.mainloop()
 
 
 if __name__ == "__main__":
-    try:
-        t_video = threading.Thread(target=video_loop, daemon=True)
-        t_video.start()
-        ui_loop()
-    finally:
-        stop_flag = True
-        set_relay(False)
+    t = threading.Thread(target=video_loop, daemon=True)
+    t.start()
+    ui_loop()

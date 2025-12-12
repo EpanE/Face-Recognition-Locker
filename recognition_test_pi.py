@@ -70,7 +70,7 @@ def match_face(descriptor):
     return "Unknown", best_distance
 
 def main():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(2)
 
     if not cap.isOpened():
         print("ERROR: Cannot open camera at index 0")
