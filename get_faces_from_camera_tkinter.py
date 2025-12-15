@@ -73,7 +73,7 @@ class Face_Register:
 
         self.cap = cv2.VideoCapture(2)  # Get video stream from camera
 
-        # self.cap = cv2.VideoCapture("test.mp4")   # Input local video
+        # self.cap = cv2.VideoCapture("D:\04 AI-VISION\Face Lock proj\VID20251212172052.mp4")   # Input local video
 
     #  Delete old face folders
     def GUI_clear_data(self):
