@@ -3,8 +3,8 @@ import os
 import time
 
 # Configuration
-PERSON_NAME = "Dinie"  # Change this to the person's name
-DATASET_PATH = "dataset"  # Base directory for datasets
+PERSON_NAME = "person_2_Dinie"  # Change this to the person's name
+DATASET_PATH = "data\data_faces_from_camera"  # Base directory for datasets
 MAX_IMAGES = 200  # Maximum number of images to capture
 CAPTURE_DELAY = 0.05  # Delay between captures in seconds
 
@@ -18,7 +18,7 @@ if not os.path.exists(person_folder):
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # Initialize webcam
-cap = cv2.VideoCapture(r"VID20251212172052.mp4")
+cap = cv2.VideoCapture(r"D:\04 AI-VISION\Face Lock proj\VID20251212172052.mp4")
 
 if not cap.isOpened():
     print("Error: Could not open webcam")
