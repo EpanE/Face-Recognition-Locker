@@ -19,8 +19,8 @@ relay = OutputDevice(RELAY_PIN, active_high=False, initial_value=True)
 
 # Recognition parameters
 MATCH_THRESHOLD = 0.55
-REQUIRED_VISIBLE_SECONDS = 3.0       # how long the same person must be seen
-RELAY_ACTIVE_TIME = 5.0              # seconds relay stays ON
+REQUIRED_VISIBLE_SECONDS = 2.0       # how long the same person must be seen
+RELAY_ACTIVE_TIME = 3.0              # seconds relay stays ON
 COOLDOWN_TIME = 3.0                  # seconds after relay OFF before next unlock
 
 # State variables
